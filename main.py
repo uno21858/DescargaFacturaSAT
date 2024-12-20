@@ -1,122 +1,180 @@
+from scipy.constants import value
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.support.ui import Select
 from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image
 from io import BytesIO
 import time
 import os
 
-# Datos del SAT
+# Configuración
 SAT_URL = "https://portalcfdi.facturaelectronica.sat.gob.mx/"
 DEMO_URL = "https://www.boxfactura.com/sat-captcha-ai-model/"
+RFC_FILE = os.path.join(os.getcwd(), "RFC.txt")
+PASSWORD_FILE = os.path.join(os.getcwd(), "passwd.txt")
+CAPTCHA_FILE = os.path.join(os.getcwd(), "captcha_sat.png")
 
-RFC = os.path.join(os.getcwd(), "RFC.txt")  # Cambia esto por tu archivo RFC
-PASSWORD = os.path.join(os.getcwd(), "passwd.txt")  # Cambia esto por tu archivo de contraseña
-try:
-    with open(RFC, 'r') as rfc_file:
-        rfc_content = rfc_file.read()
+def preguntar_mes():
+    meses_a_descargar = {"enero": "1", "febrero": "2", "marzo": "3", "abril": "4", "mayo": "5", "junio": "6",
+                         "julio": "7", "agosto": "8", "septiembre": "9", "octubre": "10", "noviembre": "11", "diciembre": "12"}
 
-    with open(PASSWORD, 'r') as password_file:
-        password_content = password_file.read()
+    mes = input("Ingresa el mes que deseas descargar (enero, febrero, etc...): ").lower()
+    if mes in meses_a_descargar:
+        return meses_a_descargar[mes]  # Retorna el número del mes como cadena (ej. "1")
+    else:
+        print("Mes inválido.")
+        return preguntar_mes()
 
-except FileNotFoundError:
-    print("Uno o ambos archivos no se encontraron.")
-except Exception as e:
-    print(f"Ocurrió un error: {e}")
+def preguntar_anio():
+    anio = input("Ingresa los dos últimos dígitos del año que deseas descargar (ej. 21): ")
+    if len(anio) == 2 and anio.isnumeric():
+        anio_completo = int("20" + anio)
+        anio_actual = int(time.strftime("%Y"))
+        if anio_completo <= anio_actual:
+            return anio
+        else:
+            print("Año inválido. No intente viajar al futuro.")
+    else:
+        print("Año inválido.")
+    return preguntar_anio()
 
+# Cargar RFC y contraseña
+def cargar_credenciales():
+    try:
+        with open(RFC_FILE, 'r') as rfc_file:
+            rfc_content = rfc_file.read().strip()
+        with open(PASSWORD_FILE, 'r') as password_file:
+            password_content = password_file.read().strip()
+        return rfc_content, password_content
+    except FileNotFoundError:
+        print("Uno o ambos archivos de credenciales no se encontraron.")
+        raise
+    except Exception as e:
+        print(f"Error al cargar credenciales: {e}")
+        raise
 
-# Inicializa Selenium
-driver = webdriver.Firefox()  # Cambia si usas otro navegador
-wait = WebDriverWait(driver, 10)
+# Configurar navegador en modo headless
+def configurar_navegador():
+    options = Options()
+    #options.add_argument("--headless")  # Navegación oculta
+    options.add_argument("--width=1920")
+    options.add_argument("--height=1080")
+    driver = webdriver.Firefox(options=options)
+    return driver
 
+# Descargar captcha del SAT
 def descargar_captcha(driver):
-    """Descargar la imagen del captcha de la página del SAT."""
-    captcha_element = wait.until(
+    captcha_element = WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.ID, "divCaptcha"))
     )
     captcha_screenshot = captcha_element.screenshot_as_png
-    captcha_image = Image.open(BytesIO(captcha_screenshot))
-
-    # Especificar una ruta absoluta para guardar el archivo
-    save_path = os.path.join(os.getcwd(), "captcha_sat.png")
-    captcha_image.save(save_path)  # Guarda la imagen en el directorio actual
-    print(f"Captcha descargado y guardado como '{save_path}'")
-    return save_path
-
-def resolver_captcha_en_demo(driver, captcha_image):
-    """Abrir la página demo y resolver el captcha."""
-    driver.execute_script("window.open('');")  # Abrir nueva pestaña
-    driver.switch_to.window(driver.window_handles[1])  # Cambiar a la nueva pestaña
-    driver.get(DEMO_URL)  # Navegar a la demo
     time.sleep(2)
-    # Subir la imagen del captcha
-    upload_element = wait.until(
+    captcha_image = Image.open(BytesIO(captcha_screenshot))
+    captcha_image.save(CAPTCHA_FILE)
+    print(f"Captcha guardado en {CAPTCHA_FILE}")
+    return CAPTCHA_FILE
+
+# Resolver captcha en demo
+def resolver_captcha_en_demo(driver, captcha_image):
+    driver.execute_script("window.open('');")
+    driver.switch_to.window(driver.window_handles[1])
+    driver.get(DEMO_URL)
+    upload_element = WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"]'))
     )
     upload_element.send_keys(captcha_image)
     time.sleep(3)
-    # Obtener el resultado del captcha
-    captcha_result = wait.until(
+    captcha_result = WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.CSS_SELECTOR, 'span.demo-output-result[data-js-result]'))
     ).text
-
     print(f"Captcha resuelto: {captcha_result}")
-
-    # Cerrar la pestaña demo y volver al SAT
     driver.close()
     driver.switch_to.window(driver.window_handles[0])
     return captcha_result
 
-
-def iniciar_sesion_en_sat(driver, captcha_text):
-    """Iniciar sesión en la página del SAT."""
-    # Rellenar RFC
-    rfc_input = wait.until(
+# Iniciar sesión en el SAT
+def iniciar_sesion_en_sat(driver, rfc, password, captcha_text):
+    WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.ID, "rfc"))
-    )
-    rfc_input.send_keys(rfc_content)
-
-
-    # Rellenar contraseña
-    password_input = wait.until(
+    ).send_keys(rfc)
+    WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.ID, "password"))
-    )
-    password_input.send_keys(password_content)
-
-
-    # Rellenar el captcha
-    captcha_input = wait.until(
+    ).send_keys(password)
+    WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.ID, "userCaptcha"))
-    )
-    captcha_input.send_keys(captcha_text)
-
-    # Hacer clic en iniciar sesión
-    submit_button = wait.until(
+    ).send_keys(captcha_text)
+    WebDriverWait(driver, 10).until(
         EC.presence_of_element_located((By.ID, "submit"))
-    )
-    submit_button.click()
+    ).click()
     print("Intentando iniciar sesión en el SAT...")
 
-# En caso de detectar un error
-def erroresSAT():
+# Verificar errores de inicio de sesión
+def verificar_error(driver):
+    try:
+        error_message = WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.ID, "msgError"))
+        ).text
+        print(f"Error detectado: {error_message}")
+        return True
+    except:
+        return False
 
-    pass
+year = preguntar_anio()
+mes = preguntar_mes()
+
+# Descargar XML Recibidos
+def descarga():
+    # IR a la sección de Recibidos
+    driver.find_element(By.XPATH, "/html/body/form/main/div[1]/div[2]/div[1]/div/div[1]/div/nav/ul/div[2]/li/a").click()
+    #filtrar por fecha
+    driver.find_element(By.ID, "ctl00_MainContent_RdoFechas").click()
+    #Fecha de Emision (mes)
+    select_mes = Select(driver.find_element(By.ID, "ctl00_MainContent_CldFecha_DdlMes"))
+    select_mes.select_by_value(mes)
+
+    select_anio = Select(driver.find_element(By.ID, "DdlAnio"))
+    select_anio.select_by_value("20"+ year)
+
+
+
 
 
 # Flujo principal
 if __name__ == "__main__":
+    driver = configurar_navegador()
+    rfc, password = cargar_credenciales()
+    intentos = 0
+    max_intentos = 6
+
     try:
         driver.get(SAT_URL)
-        # Descargar el captcha del SAT
-        captcha_path = descargar_captcha(driver)
-        # Resolver el captcha en la demo
-        captcha_text = resolver_captcha_en_demo(driver, captcha_path)
-        # Iniciar sesión en el SAT
-        iniciar_sesion_en_sat(driver, captcha_text)
+        while intentos < max_intentos:
+            try:
+                time.sleep(1)
+                captcha_path = descargar_captcha(driver)
+                captcha_text = resolver_captcha_en_demo(driver, captcha_path)
+                iniciar_sesion_en_sat(driver, rfc, password, captcha_text)
+                if verificar_error(driver):
+                    intentos += 1
+                    print(f"Reintentando... ({intentos}/{max_intentos})")
+                    driver.get(SAT_URL)  # Recargar página
+                else:
+                    print("Inicio de sesión exitoso.")
+                    """
+                    Poner abajo lo que se quiera hacer despues del inicio de sesion
+                    """
+                    descarga()
 
-    except Exception as e:
-        print(f"Error: {e}")
+
+            except Exception as e:
+                print(f"Error durante el intento: {e}")
+                intentos += 1
+        if intentos == max_intentos:
+            print("Se alcanzó el límite máximo de intentos.")
     finally:
-        time.sleep(10)  # Para inspección visual antes de cerrar
         driver.quit()
+        print("Navegador cerrado.")
+

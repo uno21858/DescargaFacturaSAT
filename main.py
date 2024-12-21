@@ -10,12 +10,6 @@ from io import BytesIO
 import time
 import os
 
-# Configuración
-SAT_URL = "https://portalcfdi.facturaelectronica.sat.gob.mx/"
-DEMO_URL = "https://www.boxfactura.com/sat-captcha-ai-model/"
-RFC_FILE = os.path.join(os.getcwd(), "RFC.txt")
-PASSWORD_FILE = os.path.join(os.getcwd(), "passwd.txt")
-CAPTCHA_FILE = os.path.join(os.getcwd(), "captcha_sat.png")
 
 def preguntar_mes():
     meses_a_descargar = {"enero": "1", "febrero": "2", "marzo": "3", "abril": "4", "mayo": "5", "junio": "6",
@@ -23,10 +17,13 @@ def preguntar_mes():
 
     mes = input("Ingresa el mes que deseas descargar (enero, febrero, etc...): ").lower()
     if mes in meses_a_descargar:
-        return meses_a_descargar[mes]  # Retorna el número del mes como cadena (ej. "1")
+        return meses_a_descargar[mes]
     else:
         print("Mes inválido.")
         return preguntar_mes()
+
+
+
 
 def preguntar_anio():
     anio = input("Ingresa los dos últimos dígitos del año que deseas descargar (ej. 21): ")
@@ -40,6 +37,13 @@ def preguntar_anio():
     else:
         print("Año inválido.")
     return preguntar_anio()
+
+# Configuración
+SAT_URL = "https://portalcfdi.facturaelectronica.sat.gob.mx/"
+DEMO_URL = "https://www.boxfactura.com/sat-captcha-ai-model/"
+RFC_FILE = os.path.join(os.getcwd(), "RFC.txt")
+PASSWORD_FILE = os.path.join(os.getcwd(), "passwd.txt")
+CAPTCHA_FILE = os.path.join(os.getcwd(), "captcha_sat.png")
 
 # Cargar RFC y contraseña
 def cargar_credenciales():
@@ -122,28 +126,75 @@ def verificar_error(driver):
     except:
         return False
 
-year = preguntar_anio()
-mes = preguntar_mes()
+
+
+# Función para crear estructura de carpetas
+def crear_estructura_carpetas(base_dir, anio, mes):
+    # Convertir mes numérico a formato de dos dígitos (ej. "01", "02", ...)
+    # Crear ruta de la carpeta
+    ruta_anio = os.path.join(base_dir, "xml_descargado", anio)
+    ruta_mes = os.path.join(ruta_anio, mes)
+    # Crear carpetas si no existen
+    os.makedirs(ruta_mes, exist_ok=True)
+    print(f"Carpeta creada o ya existente: {ruta_mes}")
+    return ruta_mes
 
 # Descargar XML Recibidos
-def descarga():
+def descarga(driver, destino):
     # IR a la sección de Recibidos
     driver.find_element(By.XPATH, "/html/body/form/main/div[1]/div[2]/div[1]/div/div[1]/div/nav/ul/div[2]/li/a").click()
-    #filtrar por fecha
+    # Filtrar por fecha
     driver.find_element(By.ID, "ctl00_MainContent_RdoFechas").click()
-    #Fecha de Emision (mes)
+    # Fecha de Emisión (mes)
     select_mes = Select(driver.find_element(By.ID, "ctl00_MainContent_CldFecha_DdlMes"))
     select_mes.select_by_value(mes)
 
     select_anio = Select(driver.find_element(By.ID, "DdlAnio"))
-    select_anio.select_by_value("20"+ year)
+    select_anio.select_by_value("20" + year)
 
+    # Poner RFC Emisor
+    driver.find_element(By.ID, "ctl00_MainContent_TxtRfcReceptor").send_keys("GCO740121MC5")
+    # Facturas Vigentes
+    Select(driver.find_element(By.ID, "ctl00_MainContent_DdlEstadoComprobante")).select_by_value("1")
+    # Buscar CFDis
+    driver.find_element(By.ID, "ctl00_MainContent_BtnBusqueda").click()
+    # Descargar XML
+    botones_descarga = driver.find_elements(By.ID, "BtnDescarga")
+    for index, boton in enumerate(botones_descarga, start=1):
+        try:
+            boton.click()
+            print(f"Descargando XML {index} de {len(botones_descarga)}")
+            time.sleep(1)
+            # Mover los archivos descargados a la carpeta de destino
+            archivo_descargado = mover_archivo_descargado(destino)
+            print(f"Archivo movido a: {archivo_descargado}")
+        except Exception as e:
+            print(f"Error al descargar XML {index}: {e}")
+            continue
 
+def mover_archivo_descargado(destino):
+    # Ruta predeterminada de descargas (ajusta si es necesario)
+    ruta_descargas = os.path.join(os.path.expanduser("~"), "Downloads")
+    archivos = [f for f in os.listdir(ruta_descargas) if f.endswith(".xml")]
+    if archivos:
+        archivo = archivos[-1]  # Toma el archivo más reciente
+        origen = os.path.join(ruta_descargas, archivo)
+        destino_final = os.path.join(destino, archivo)
+        os.rename(origen, destino_final)
+        return destino_final
+    else:
+        print("No se encontraron archivos XML en la carpeta de descargas.")
+        return None
 
 
 
 # Flujo principal
 if __name__ == "__main__":
+    base_dir = os.getcwd()  # Cambia esto si necesitas usar otra carpeta base
+    year = preguntar_anio()
+    mes = preguntar_mes()
+    carpeta_destino = crear_estructura_carpetas(base_dir, "20" + year, mes)
+
     driver = configurar_navegador()
     rfc, password = cargar_credenciales()
     intentos = 0
@@ -163,18 +214,13 @@ if __name__ == "__main__":
                     driver.get(SAT_URL)  # Recargar página
                 else:
                     print("Inicio de sesión exitoso.")
-                    """
-                    Poner abajo lo que se quiera hacer despues del inicio de sesion
-                    """
-                    descarga()
-
-
+                    descarga(driver, carpeta_destino)
             except Exception as e:
                 print(f"Error durante el intento: {e}")
                 intentos += 1
         if intentos == max_intentos:
             print("Se alcanzó el límite máximo de intentos.")
     finally:
+        time.sleep(5)
         driver.quit()
         print("Navegador cerrado.")
-
